@@ -8,11 +8,14 @@ import Data.Aeson qualified as Aeson
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LBS
+import Data.Csv (DefaultOrdered, ToNamedRecord, ToRecord, encode)
+import Data.Csv qualified as Cassava
 import Data.Text (Text)
 import GHC.Generics (Generic)
+import Options.Applicative (ParserInfo, command, customExecParser, fullDesc, help, helper, info, long, metavar, prefs, progDesc, short, showHelpOnEmpty, showHelpOnError, strOption, subparser, (<**>))
+import Options.Applicative qualified as Cmd
+import System.Directory.Internal.Prelude (exitFailure)
 import System.Environment (getArgs)
-import Text.Parsec
-import Text.Parsec qualified as Parse
 import Text.Parsec qualified as Parsec
 
 data Statement = Statement
@@ -33,7 +36,7 @@ data SummaryEntry = SummaryEntry
     , paidIn :: String
     , paidOut :: String
     }
-    deriving (Show, Eq, Ord, Generic, ToJSON)
+    deriving (Show, Eq, Ord, Generic, ToJSON, ToNamedRecord, DefaultOrdered)
 
 data TransactionEntry = TransactionEntry
     { receiptNumber :: String
@@ -43,7 +46,7 @@ data TransactionEntry = TransactionEntry
     , withdrawn :: String
     , balance :: String
     }
-    deriving (Show, Eq, Ord, Generic, ToJSON)
+    deriving (Show, Eq, Ord, Generic, ToJSON, ToNamedRecord, DefaultOrdered)
 
 type Parser a = Parsec.Parsec ByteString () a
 
@@ -90,7 +93,7 @@ parseSummaryEntry = do
 parseSummary :: Parser Summary
 parseSummary = do
     Parsec.string "TRANSACTION TYPE PAID IN PAID OUT" >> Parsec.newline
-    Parse.manyTill parseSummaryEntry (Parsec.try $ Parsec.string "Receipt No. Completion Time Details Transaction Status Paid In Withdrawn Balance" >> Parsec.newline)
+    Parsec.manyTill parseSummaryEntry (Parsec.try $ Parsec.string "Receipt No. Completion Time Details Transaction Status Paid In Withdrawn Balance" >> Parsec.newline)
 
 parseReceiptNumber :: Parser String
 parseReceiptNumber = replicateM 10 (Parsec.choice [Parsec.letter, Parsec.digit])
@@ -122,13 +125,54 @@ parseTransactionEntry = do
             }
 
 parseTransactions :: Parser [TransactionEntry]
-parseTransactions = many1 parseTransactionEntry
+parseTransactions = Parsec.many1 parseTransactionEntry
+
+-- | CLI
+newtype Options = Options
+    { inputTxt :: FilePath
+    }
+
+optionsParser :: Cmd.Parser Options
+optionsParser =
+    Options
+        <$> strOption
+            ( long "input"
+                <> short 'i'
+                <> metavar "TXT"
+                <> help "Text file as outputted by mpesa-preprocess.sh tool"
+            )
+
+data Command
+    = ToCsv Options
+    | ToJson Options
+
+commandP :: Cmd.Parser Command
+commandP =
+    subparser $
+        command
+            "to-csv"
+            (info (ToCsv <$> optionsParser <* helper) (progDesc "Translate a .csv file from an M-PESA .pdf statement"))
+            <> command
+                "to-json"
+                (info (ToJson <$> optionsParser <* helper) (progDesc "Translate a .json file from an M-PESA .pdf statement"))
+
+parserInfo :: ParserInfo Command
+parserInfo = info (commandP <**> helper) (fullDesc <> progDesc "M-PESA .pdf statement processing tool")
+
+parseFromFile :: FilePath -> IO Statement
+parseFromFile fp = do
+    txt <- ByteString.readFile fp
+    case Parsec.runParser parseStatement () fp txt of
+        Left err -> print err >> exitFailure
+        Right statement -> return statement
 
 main :: IO ()
 main = do
-    [fp] <- getArgs
-    contents <- ByteString.readFile fp
-    let res = Parsec.runParser parseStatement () fp contents
-    case res of
-        Left err -> print err
-        Right mpesa -> LBS.putStr $ Aeson.encode mpesa
+    cmd <- customExecParser (prefs (showHelpOnEmpty <> showHelpOnError)) parserInfo
+    case cmd of
+        ToJson opts -> do
+            statement <- parseFromFile (inputTxt opts)
+            LBS.putStr $ Aeson.encode statement
+        ToCsv opts -> do
+            statement <- parseFromFile (inputTxt opts)
+            LBS.putStr $ Cassava.encodeDefaultOrderedByName (transactions statement)
