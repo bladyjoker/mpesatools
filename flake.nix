@@ -24,7 +24,7 @@
         mkdir $WORK;
         preprocess $1 $WORK;
         ${ghc}/bin/runghc ${./MPesa.hs} to-csv --input $WORK/mpesa.txt
-        '';
+      '';
       packages.x86_64-linux.mpesa2json = pkgs.writeScriptBin "mpesa2json" ''
         . ${./mpesa.sh};
         WORK=$(echo $TMPDIR/mpesa-tools);
@@ -32,7 +32,7 @@
         mkdir $WORK;
         preprocess $1 $WORK;
         ${ghc}/bin/runghc ${./MPesa.hs} to-json --input $WORK/mpesa.txt
-        '';
+      '';
 
     };
 }
